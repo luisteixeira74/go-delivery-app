@@ -6,7 +6,7 @@ Aplicação desenvolvida em **Go (Golang)** simulando uma plataforma completa de
 
 ## 📸 Painel de Operações
 
-![Go Delivery Dashboard](docs/images/dashboard.png)
+![Go Delivery Dashboard](./docs/images/dashboard.png)
 
 ---
 
@@ -71,5 +71,3 @@ Plaintext
 ├── web/ # Arquivos estáticos e template do frontend
 ├── main.go # Ponto de entrada do servidor HTTP e conexões
 └── README.md
-
-![Go Delivery - Painel de Operações](./docs/images/dashboard.jpg)
