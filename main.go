@@ -48,13 +48,13 @@ type OrderTask struct {
 }
 
 var (
+	ctx      = context.Background()
 	db       *sql.DB
+	rdb      *redis.Client
 	eventHub *events.Hub
-	workerPool *workers.Pool
 )
 
 func initDB() {
-	var err error
 	dbHost := os.Getenv("DB_HOST")
 	dbPort := os.Getenv("DB_PORT")
 	dbUser := os.Getenv("DB_USER")
@@ -64,6 +64,7 @@ func initDB() {
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		dbHost, dbPort, dbUser, dbPassword, dbName)
 
+	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatalf("Erro ao conectar no banco de dados: %v", err)
@@ -74,6 +75,23 @@ func initDB() {
 	}
 
 	fmt.Println("Conexão com PostgreSQL realizada com sucesso!")
+}
+
+func initRedis() {
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+
+	rdb = redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+	})
+
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Fatalf("Erro ao conectar no Redis: %v", err)
+	}
+
+	fmt.Println("Conexão com Redis realizada com sucesso!")
 }
 
 func createOrderHandler(w http.ResponseWriter, r *http.Request) {
@@ -114,17 +132,17 @@ func createOrderHandler(w http.ResponseWriter, r *http.Request) {
 	var createdAt time.Time
 
 	queryOrder := `
-		INSERT INTO orders (store_id, status, total_cents, delivery_latitude, delivery_longitude)
-		VALUES ($1, $2::order_status, $3, $4, $5)
-		RETURNING id, created_at
-	`
+        INSERT INTO orders (store_id, status, total_cents, delivery_latitude, delivery_longitude)
+        VALUES ($1, $2::order_status, $3, $4, $5)
+        RETURNING id, created_at
+    `
 
 	err = tx.QueryRow(
-		queryOrder, 
-		req.StoreID, 
-		status, 
-		totalCents, 
-		req.DeliveryLatitude, 
+		queryOrder,
+		req.StoreID,
+		status,
+		totalCents,
+		req.DeliveryLatitude,
 		req.DeliveryLongitude,
 	).Scan(&orderID, &createdAt)
 
@@ -135,9 +153,9 @@ func createOrderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queryItem := `
-		INSERT INTO order_items (order_id, name, quantity, unit_price_cents)
-		VALUES ($1, $2, $3, $4)
-	`
+        INSERT INTO order_items (order_id, name, quantity, unit_price_cents)
+        VALUES ($1, $2, $3, $4)
+    `
 
 	for _, item := range req.Items {
 		itemPriceCents := int(item.Price * 100)
@@ -160,25 +178,33 @@ func createOrderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Notifica via WebSocket para atualizar a coluna do Kanban
+	// 1. Notifica via WebSocket para atualizar a UI/Kanban instantaneamente
 	eventHub.Publish(events.OrderEvent{
 		EventID:   uuid.NewString(),
 		Type:      events.OrderCreated,
 		OrderID:   orderID,
 		StoreID:   req.StoreID,
-		WorkerID:  0, // 0 representa evento originado pela API HTTP
+		WorkerID:  0,
 		Items:     itemsDTO,
 		TotalCent: totalCents,
 		Timestamp: time.Now(),
 	})
 
-	// Enfileira a tarefa no Worker Pool para movimentação de status
-	workerPool.Enqueue(workers.OrderTask{
+	// 2. Publica a tarefa na fila do Redis (substituindo o WorkerPool local)
+	taskPayload, err := json.Marshal(OrderTask{
 		OrderID:   orderID,
 		StoreID:   req.StoreID,
 		Items:     itemsDTO,
 		TotalCent: totalCents,
 	})
+	if err != nil {
+		log.Printf("Erro ao serializar OrderTask: %v", err)
+	} else {
+		// Enfileira no Redis (Lista/Queue "order_tasks")
+		if err := rdb.RPush(ctx, "order_tasks", taskPayload).Err(); err != nil {
+			log.Printf("Erro ao enfileirar tarefa no Redis: %v", err)
+		}
+	}
 
 	resp := OrderResponse{
 		ID:         orderID,
@@ -194,56 +220,21 @@ func createOrderHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func createOrderHandler(rdb *redis.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.Background()
-
-		// Cria dados do pedido
-		task := OrderTask{
-			OrderID:   uuid.NewString(),
-			StoreID:   "store-01",
-			TotalCent: 4500,
-			Items: []events.ItemDTO{
-				{Name: "X-Burguer", Quantity: 2},
-				{Name: "Refrigerante", Quantity: 1},
-			},
-		}
-
-		data, err := json.Marshal(task)
-		if err != nil {
-			http.Error(w, "Erro ao serializar pedido", http.StatusInternalServerError)
-			return
-		}
-
-		// Envia para a fila do Redis (LPUSH)
-		err = rdb.LPush(ctx, "queue:orders", data).Err()
-		if err != nil {
-			log.Printf("Erro ao publicar no Redis: %v", err)
-			http.Error(w, "Erro ao enfileirar pedido", http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("[API] 📥 Pedido %s enviado para a fila 'queue:orders'", task.OrderID)
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		fmt.Fprintf(w, `{"status":"queued","order_id":"%s"}`, task.OrderID)
-	}
-}
-
 func main() {
 	initDB()
 	defer db.Close()
+
+	initRedis()
+	defer rdb.Close()
 
 	// Inicializa e roda o Hub de eventos
 	eventHub = events.NewHub()
 	go eventHub.Run()
 
-	// 2. Inicializa o Worker Pool com 3 workers concorrentes e buffer de 100 tarefas
-	workerPool = workers.NewPool(3, 100, db, eventHub)
-	workerPool.Start()
+	workerPool := workers.NewWorkerPool(db, rdb, eventHub)
+	workerPool.Start(ctx)
 
-	// 1. Serve a página do Kanban na rota raiz /
+	// Serve a página do Kanban na rota raiz /
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
