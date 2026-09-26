@@ -72,4 +72,4 @@ Plaintext
 ├── main.go # Ponto de entrada do servidor HTTP e conexões
 └── README.md
 
-![Go Delivery - Painel de Operações & Rastreamento GPS](docs/images/dashboard.jpg)
+![Go Delivery - Painel de Operações](./docs/images/dashboard.jpg)
