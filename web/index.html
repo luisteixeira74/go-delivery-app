@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Go Delivery - Painel</title>
+
+    <!-- Leaflet CSS -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <style>
+      * {
+        box-sizing: border-box;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        padding: 24px;
+        background-color: #f4f5f7;
+      }
+      h1 {
+        margin-bottom: 24px;
+        color: #172b4d;
+        text-align: center;
+      }
+      h2.section-title {
+        margin: 30px 0 15px 0;
+        color: #172b4d;
+        font-size: 16px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      /* Board Kanban */
+      .board {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+      }
+      .column {
+        background: #ebecf0;
+        border-radius: 8px;
+        padding: 14px;
+        min-height: 320px;
+      }
+      .column h2 {
+        font-size: 12px;
+        margin-bottom: 12px;
+        text-transform: uppercase;
+        color: #5e6c84;
+        letter-spacing: 0.5px;
+      }
+
+      /* Base do Card */
+      .card {
+        background: #fff;
+        padding: 12px;
+        border-radius: 6px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        margin-bottom: 10px;
+        font-size: 12px;
+        border-left: 4px solid #0052cc;
+        transition: all 0.3s ease;
+      }
+      .card-id {
+        font-weight: 700;
+        color: #0052cc;
+        margin-bottom: 6px;
+      }
+      .card-items {
+        font-size: 11px;
+        color: #42526e;
+        margin-bottom: 8px;
+        padding-left: 14px;
+      }
+      .card-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 6px;
+        font-weight: 600;
+        color: #172b4d;
+      }
+
+      /* ETAPA 1: Novo Pedido (AZUL CLARO) */
+      .card.created {
+        border-left-color: #4c9aff;
+        background-color: #deebff;
+      }
+
+      /* ETAPA 2: Em Preparo (AZUL PADRÃO) */
+      .card.preparing {
+        border-left-color: #0052cc;
+      }
+
+      /* ETAPA 3: Pronto (VERDE) */
+      .card.ready {
+        border-left-color: #36b37e;
+        background-color: #e3fcef;
+      }
+      .card.ready .card-id {
+        color: #006644;
+      }
+
+      /* ETAPA 4: Entregue (CINZA) */
+      .card.delivered {
+        background-color: #fafbfc;
+        border-left-color: #6b778c;
+        border-right: 1px solid #e2e4e9;
+        border-top: 1px solid #e2e4e9;
+        border-bottom: 1px solid #e2e4e9;
+        opacity: 0.85;
+      }
+      .card.delivered .card-id,
+      .card.delivered .card-meta {
+        color: #505f79;
+      }
+      .card.delivered .badge-delivered {
+        background-color: #6b778c;
+        color: #fff;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+
+      /* Mapa GPS */
+      #map {
+        width: 100%;
+        height: 380px;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      }
+
+      /* SIMULADOR APP DO CLIENTE (TEMA VERMELHO) */
+      .client-app-wrapper {
+        display: flex;
+        justify-content: center;
+        margin-top: 30px;
+      }
+
+      .mobile-frame {
+        width: 100%;
+        max-width: 420px;
+        background: #ea1d2c; /* Vermelho estilo iFood */
+        border-radius: 24px;
+        box-shadow: 0 10px 25px rgba(234, 29, 44, 0.3);
+        color: #fff;
+        padding: 20px;
+        overflow: hidden;
+      }
+
+      .app-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        padding-bottom: 12px;
+        margin-bottom: 16px;
+      }
+
+      .app-header h3 {
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .app-card {
+        background: #fff;
+        color: #172b4d;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+
+      .status-badge {
+        display: inline-block;
+        background: #ffebe6;
+        color: #ea1d2c;
+        font-weight: 700;
+        font-size: 12px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        margin-bottom: 10px;
+        text-transform: uppercase;
+      }
+
+      .status-title {
+        font-size: 18px;
+        font-weight: 800;
+        margin-bottom: 6px;
+        color: #172b4d;
+      }
+
+      .status-desc {
+        font-size: 13px;
+        color: #5e6c84;
+        margin-bottom: 14px;
+      }
+
+      /* Barra de Progresso no App */
+      .progress-bar-container {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 16px;
+      }
+      .progress-step {
+        height: 6px;
+        flex: 1;
+        background: #e2e4e9;
+        border-radius: 3px;
+        transition: background 0.3s ease;
+      }
+      .progress-step.active {
+        background: #ea1d2c;
+      }
+
+      /* Painel do GPS no App */
+      .gps-info-box {
+        background: #fff0f0;
+        border: 1px solid #ffccd1;
+        border-radius: 8px;
+        padding: 12px;
+        text-align: center;
+        display: none; /* Exibido apenas em rota */
+      }
+      .gps-distance {
+        font-size: 24px;
+        font-weight: 800;
+        color: #ea1d2c;
+      }
+      .gps-label {
+        font-size: 11px;
+        color: #7a869a;
+        text-transform: uppercase;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>📋 Go Delivery - Painel de Operações & Rastreamento GPS</h1>
+
+    <!-- SEÇÃO KANBAN -->
+    <div class="board">
+      <div class="column">
+        <h2>Novos (CONFIRMED)</h2>
+        <div id="col-ORDER_CREATED"></div>
+      </div>
+      <div class="column">
+        <h2>Em Preparo (PREPARING)</h2>
+        <div id="col-ORDER_IN_PREPARATION"></div>
+      </div>
+      <div class="column">
+        <h2>Prontos (READY)</h2>
+        <div id="col-ORDER_READY"></div>
+      </div>
+      <div class="column">
+        <h2>Em Rota / Entregue</h2>
+        <div id="col-ORDER_OUT_FOR_DELIVERY"></div>
+      </div>
+    </div>
+
+    <!-- SEÇÃO DO MAPA EM TEMPO REAL -->
+    <h2 class="section-title">
+      📍 Rastreamento de Entrega (GPS em Tempo Real)
+    </h2>
+    <div id="map"></div>
+
+    <!-- SEÇÃO SIMULADOR APP DO CLIENTE -->
+    <h2 class="section-title">📱 Visão do Cliente (App Mobile)</h2>
+    <div class="client-app-wrapper">
+      <div class="mobile-frame">
+        <div class="app-header">
+          <h3>GoDelivery App</h3>
+          <span id="app-order-id" style="font-size: 11px; opacity: 0.8"
+            >Aguardando pedido...</span
+          >
+        </div>
+
+        <div class="app-card">
+          <div class="progress-bar-container">
+            <div id="step-1" class="progress-step"></div>
+            <div id="step-2" class="progress-step"></div>
+            <div id="step-3" class="progress-step"></div>
+            <div id="step-4" class="progress-step"></div>
+          </div>
+
+          <span id="app-badge" class="status-badge">Aguardando</span>
+          <div id="app-title" class="status-title">Nenhum pedido ativo</div>
+          <div id="app-desc" class="status-desc">
+            Acompanhe aqui o status do seu pedido em tempo real.
+          </div>
+
+          <!-- Caixa com Distância do GPS -->
+          <div id="gps-box" class="gps-info-box">
+            <div class="gps-label">Distância do Entregador</div>
+            <div id="gps-distance" class="gps-distance">--</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+      // 1. Coordenada do Destino do Cliente (São Paulo)
+      const DESTINATION = { lat: -23.56168, lng: -46.655981 };
+
+      // 2. Inicializa o Mapa
+      const map = L.map("map").setView([-23.55052, -46.633308], 14);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap",
+      }).addTo(map);
+
+      // Adiciona Marcador Fixo da Casa do Cliente no Mapa
+      L.marker([DESTINATION.lat, DESTINATION.lng])
+        .addTo(map)
+        .bindPopup("🏠 Seu Endereço");
+
+      const deliveryMarkers = {};
+
+      // 3. Conexão WebSocket
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+      ws.onopen = () => console.log("WebSocket conectado ao Hub Go!");
+      ws.onclose = () => console.log("Conexão WebSocket encerrada.");
+      ws.onerror = (err) => console.error("Erro WS:", err);
+
+      ws.onmessage = (event) => {
+        const payload = JSON.parse(event.data);
+
+        if (payload.type === "LOCATION_UPDATED") {
+          updateDeliveryMap(payload);
+          updateClientAppGps(payload);
+          return;
+        }
+
+        updateKanbanCard(payload);
+        updateClientAppStatus(payload);
+      };
+
+      // --- ATUALIZAÇÃO DO KANBAN ---
+      function updateKanbanCard(evt) {
+        let existingCard = document.getElementById(`card-${evt.order_id}`);
+        let itemsHtml = "";
+        let totalCents = evt.total_cent || 0;
+
+        if (existingCard) {
+          const oldItems = existingCard.querySelector(".card-items");
+          if (oldItems && (!evt.items || evt.items.length === 0)) {
+            itemsHtml = oldItems.innerHTML;
+          }
+          if (!totalCents && existingCard.dataset.totalCents) {
+            totalCents = parseInt(existingCard.dataset.totalCents, 10);
+          }
+          existingCard.remove();
+        }
+
+        if (evt.items && evt.items.length > 0) {
+          itemsHtml = evt.items
+            .map((i) => `<li>${i.quantity}x ${i.name}</li>`)
+            .join("");
+        }
+
+        const isDelivered = evt.type === "ORDER_DELIVERED";
+        const formattedPrice = (totalCents / 100).toLocaleString("pt-BR", {
+          style: "currency",
+          currency: "BRL",
+        });
+
+        let statusClass = "";
+        switch (evt.type) {
+          case "ORDER_CREATED":
+            statusClass = "created";
+            break;
+          case "ORDER_IN_PREPARATION":
+            statusClass = "preparing";
+            break;
+          case "ORDER_READY":
+            statusClass = "ready";
+            break;
+          case "ORDER_DELIVERED":
+            statusClass = "delivered";
+            break;
+        }
+
+        const card = document.createElement("div");
+        card.id = `card-${evt.order_id}`;
+        card.className = `card ${statusClass}`;
+        card.dataset.totalCents = totalCents;
+
+        card.innerHTML = `
+          <div class="card-id">ID: ${evt.order_id.substring(0, 8)}...</div>
+          ${itemsHtml ? `<ul class="card-items">${itemsHtml}</ul>` : ""}
+          <div class="card-meta">
+            <span>${formattedPrice}</span>
+            ${isDelivered ? '<span class="badge-delivered">ENTREGUE</span>' : ""}
+          </div>
+        `;
+
+        const targetColId = isDelivered
+          ? "col-ORDER_OUT_FOR_DELIVERY"
+          : `col-${evt.type}`;
+
+        const targetCol = document.getElementById(targetColId);
+        if (targetCol) targetCol.appendChild(card);
+      }
+
+      // --- ATUALIZAÇÃO DO MAPA ---
+      function updateDeliveryMap(data) {
+        const { order_id, latitude, longitude } = data;
+
+        if (!deliveryMarkers[order_id]) {
+          deliveryMarkers[order_id] = L.marker([latitude, longitude])
+            .addTo(map)
+            .bindPopup(`🛵 Entregador - Pedido #${order_id.substring(0, 8)}`)
+            .openPopup();
+
+          map.panTo([latitude, longitude]);
+        } else {
+          deliveryMarkers[order_id].setLatLng([latitude, longitude]);
+        }
+      }
+
+      // --- LÓGICA DO APP DO CLIENTE ---
+      function updateClientAppStatus(evt) {
+        document.getElementById("app-order-id").innerText =
+          `Pedido #${evt.order_id.substring(0, 8)}`;
+
+        const badge = document.getElementById("app-badge");
+        const title = document.getElementById("app-title");
+        const desc = document.getElementById("app-desc");
+        const gpsBox = document.getElementById("gps-box");
+
+        // Passos da barra de progresso
+        const s1 = document.getElementById("step-1");
+        const s2 = document.getElementById("step-2");
+        const s3 = document.getElementById("step-3");
+        const s4 = document.getElementById("step-4");
+
+        // Reseta passos
+        [s1, s2, s3, s4].forEach((s) => s.classList.remove("active"));
+
+        switch (evt.type) {
+          case "ORDER_CREATED":
+            badge.innerText = "Confirmado";
+            title.innerText = "Pedido recebido!";
+            desc.innerText = "A lanchonete já recebeu o seu pedido.";
+            s1.classList.add("active");
+            gpsBox.style.display = "none";
+            break;
+
+          case "ORDER_IN_PREPARATION":
+            badge.innerText = "Em Preparo";
+            title.innerText = "Preparando sua refeição";
+            desc.innerText = "O chef já está cuidando dos seus itens.";
+            s1.classList.add("active");
+            s2.classList.add("active");
+            gpsBox.style.display = "none";
+            break;
+
+          case "ORDER_READY":
+            badge.innerText = "Pronto";
+            title.innerText = "Pedido pronto!";
+            desc.innerText = "Aguardando o entregador retirar o pacote.";
+            s1.classList.add("active");
+            s2.classList.add("active");
+            s3.classList.add("active");
+            gpsBox.style.display = "none";
+            break;
+
+          case "ORDER_OUT_FOR_DELIVERY":
+            badge.innerText = "Em Rota";
+            title.innerText = "Saiu para entrega!";
+            desc.innerText = "O entregador está a caminho do seu endereço.";
+            s1.classList.add("active");
+            s2.classList.add("active");
+            s3.classList.add("active");
+            s4.classList.add("active");
+            gpsBox.style.display = "block";
+            break;
+
+          case "ORDER_DELIVERED":
+            badge.innerText = "Concluído";
+            title.innerText = "Seu pedido chegou! 🎉";
+            desc.innerText = "Bom apetite! Agradecemos a preferência.";
+            s1.classList.add("active");
+            s2.classList.add("active");
+            s3.classList.add("active");
+            s4.classList.add("active");
+            gpsBox.style.display = "block";
+            document.getElementById("gps-distance").innerText = "0m";
+            break;
+        }
+      }
+
+      function updateClientAppGps(data) {
+        const distanceMeters = calculateDistance(
+          data.latitude,
+          data.longitude,
+          DESTINATION.lat,
+          DESTINATION.lng,
+        );
+
+        const gpsDistEl = document.getElementById("gps-distance");
+
+        if (distanceMeters <= 20) {
+          gpsDistEl.innerText = "0m";
+          document.getElementById("app-title").innerText =
+            "Seu pedido chegou! 🎉";
+          document.getElementById("app-desc").innerText =
+            "O entregador está na sua porta.";
+        } else if (distanceMeters >= 1000) {
+          gpsDistEl.innerText = `${(distanceMeters / 1000).toFixed(1)} km`;
+        } else {
+          gpsDistEl.innerText = `${Math.round(distanceMeters)}m`;
+        }
+      }
+
+      // Função Auxiliar: Cálculo da Distância em Metros (Fórmula de Haversine)
+      function calculateDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3; // Raio da Terra em metros
+        const φ1 = (lat1 * Math.PI) / 180;
+        const φ2 = (lat2 * Math.PI) / 180;
+        const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+        const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+        const a =
+          Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+          Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+        return R * c;
+      }
+    </script>
+  </body>
+</html>
