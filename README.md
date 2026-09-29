@@ -58,6 +58,27 @@ curl -X POST http://localhost:8080/orders \
  -d '{"store_id":"s1","delivery_latitude":-23.56168,"delivery_longitude":-46.655981,"items":[{"name":"Pizza Pepperoni","quantity":1,"price":58.0}]}' &
 ```
 
+20 Pedidos de uma vez
+
+```bash
+#!/bin/bash
+echo "🚀 Disparando 20 pedidos para a API..."
+
+for i in {1..20}
+do
+   curl -s -X POST http://localhost:8080/orders \
+     -H "Content-Type: application/json" \
+     -d '{
+       "store_id": "11111111-1111-1111-1111-111111111111",
+       "delivery_latitude": -23.56168,
+       "delivery_longitude": -46.655981,
+       "items": [{"name": "X-Burguer", "quantity": 1, "price": 25.0}]
+     }' > /dev/null &
+done
+
+echo "✅ 20 pedidos enviados para a fila do Redis!"
+```
+
 ### 📁 Estrutura de Diretórios
 
 Plaintext
