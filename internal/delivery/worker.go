@@ -1,30 +1,48 @@
-package workers
+package delivery
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"time"
 
-	"go-delivery/events"
+	"go-delivery/internal/platform/events"
 
 	"github.com/google/uuid"
 )
 
-func SimulateDelivery(
-	db *sql.DB,
+type DeliveryWorker struct {
+	db       *sql.DB
+	eventHub *events.Hub
+}
+
+func NewDeliveryWorker(db *sql.DB, eventHub *events.Hub) *DeliveryWorker {
+	return &DeliveryWorker{
+		db:       db,
+		eventHub: eventHub,
+	}
+}
+
+// SimulateDelivery realiza a simulação do deslocamento por GPS até a entrega final
+func (w *DeliveryWorker) SimulateDelivery(
+	ctx context.Context,
 	orderID string,
 	storeID string,
-	hub *events.Hub,
 	items []events.ItemDTO,
 	totalCent int,
 	startLat, startLng, endLat, endLng float64,
 ) {
-	// Aguarda 10 segundos em READY para dar tempo de visualizar o card na coluna "Prontos"
-	time.Sleep(10 * time.Second)
+	// Aguarda 10 segundos em READY (respeitando o cancelamento do contexto)
+	select {
+	case <-time.After(10 * time.Second):
+	case <-ctx.Done():
+		log.Printf("[GPS Worker] Simulação do pedido %s cancelada antes de iniciar.", orderID)
+		return
+	}
 
 	// 1. Atualiza banco e avisa o Kanban: Saiu para entrega!
-	updateStatus(db, orderID, "OUT_FOR_DELIVERY")
-	hub.Publish(events.OrderEvent{
+	w.updateStatus(orderID, "OUT_FOR_DELIVERY")
+	w.eventHub.Publish(ctx, events.OrderEvent{
 		EventID:   uuid.NewString(),
 		Type:      events.OrderOutForDelivery,
 		OrderID:   orderID,
@@ -37,12 +55,18 @@ func SimulateDelivery(
 
 	steps := 10
 	for i := 1; i <= steps; i++ {
-		time.Sleep(1500 * time.Millisecond)
+		// ✅ Substituído time.Sleep por select para reagir ao shutdown em qualquer passo
+		select {
+		case <-time.After(1500 * time.Millisecond):
+		case <-ctx.Done():
+			log.Printf("[GPS Worker] ⚠️ Interrompendo simulação GPS do pedido %s no passo %d/%d (Shutdown)", orderID, i, steps)
+			return
+		}
 
 		currentLat := startLat + (endLat-startLat)*(float64(i)/float64(steps))
 		currentLng := startLng + (endLng-startLng)*(float64(i)/float64(steps))
 
-		hub.Publish(events.OrderEvent{
+		w.eventHub.Publish(ctx, events.OrderEvent{
 			EventID:   uuid.NewString(),
 			Type:      events.LocationUpdated,
 			OrderID:   orderID,
@@ -56,8 +80,8 @@ func SimulateDelivery(
 	}
 
 	// 2. Chegou ao destino: Atualiza banco e avisa o Kanban!
-	updateStatus(db, orderID, "DELIVERED")
-	hub.Publish(events.OrderEvent{
+	w.updateStatus(orderID, "DELIVERED")
+	w.eventHub.Publish(ctx, events.OrderEvent{
 		EventID:   uuid.NewString(),
 		Type:      events.OrderDelivered,
 		OrderID:   orderID,
@@ -71,9 +95,12 @@ func SimulateDelivery(
 	log.Printf("==================================================")
 }
 
-func updateStatus(db *sql.DB, orderID string, status string) {
+func (w *DeliveryWorker) updateStatus(orderID string, status string) {
+	if w.db == nil {
+		return
+	}
 	query := `UPDATE orders SET status = $1::order_status WHERE id = $2`
-	if _, err := db.Exec(query, status, orderID); err != nil {
+	if _, err := w.db.Exec(query, status, orderID); err != nil {
 		log.Printf("Erro ao atualizar status para %s: %v", status, err)
 	}
 }

@@ -12,10 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"go-delivery/events"
-	"go-delivery/workers"
+	"go-delivery/internal/delivery"
+	"go-delivery/internal/order"
+	"go-delivery/internal/platform/events"
 
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 )
@@ -48,18 +50,29 @@ var (
 	eventHub *events.Hub
 )
 
-func initDB() {
-	dbHost := os.Getenv("DB_HOST")
-	dbPort := os.Getenv("DB_PORT")
-	dbUser := os.Getenv("DB_USER")
-	dbPassword := os.Getenv("DB_PASSWORD")
-	dbName := os.Getenv("DB_NAME")
+func getEnv(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func initDB() *sql.DB {
+	// Carrega as variáveis do arquivo .env (se existir)
+	if err := godotenv.Load(); err != nil {
+		log.Println("Aviso: Arquivo .env não encontrado, usando variáveis do sistema/fallback")
+	}
+
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "5432")
+	dbUser := getEnv("DB_USER", "postgres")
+	dbPassword := getEnv("DB_PASSWORD", "postgrespassword")
+	dbName := getEnv("DB_NAME", "ifood_db")
 
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		dbHost, dbPort, dbUser, dbPassword, dbName)
 
-	var err error
-	db, err = sql.Open("postgres", connStr)
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatalf("Erro ao conectar no banco de dados: %v", err)
 	}
@@ -68,7 +81,8 @@ func initDB() {
 		log.Fatalf("Erro ao validar conexão com PostgreSQL: %v", err)
 	}
 
-	fmt.Println("Conexão com PostgreSQL realizada com sucesso!")
+	log.Println("Conexão com PostgreSQL realizada com sucesso!")
+	return db
 }
 
 func initRedis(ctx context.Context) {
@@ -111,6 +125,7 @@ func createOrderHandler(w http.ResponseWriter, r *http.Request) {
 		itemsDTO = append(itemsDTO, events.ItemDTO{
 			Name:     item.Name,
 			Quantity: item.Quantity,
+			Price:    item.Price * 100, // Ajustado: Cálculo direto em float64
 		})
 	}
 
@@ -174,10 +189,10 @@ func createOrderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Notifica via WebSocket
-	eventHub.Publish(events.OrderEvent{
+	// 1. Notifica o Hub de Eventos (Kanban / WebSocket)
+	eventHub.Publish(r.Context(), events.OrderEvent{
 		EventID:   uuid.NewString(),
-		Type:      "ORDER_CREATED",
+		Type:      events.OrderCreated, // Recomendado usar a constante do pacote events
 		OrderID:   orderID,
 		StoreID:   req.StoreID,
 		WorkerID:  0,
@@ -186,8 +201,8 @@ func createOrderHandler(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now(),
 	})
 
-	// 2. Enfileira no Redis
-	taskPayload, err := json.Marshal(workers.OrderTask{
+	// 2. Enfileira a tarefa no Redis usando o OrderTask do pacote internal/order
+	taskPayload, err := json.Marshal(order.OrderTask{
 		OrderID:   orderID,
 		StoreID:   req.StoreID,
 		Items:     itemsDTO,
@@ -216,25 +231,29 @@ func createOrderHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// 1. Cria contexto global vinculado a sinais do SO (Ctrl+C / SIGTERM)
+	// 1. Contexto vinculado a sinais do SO (Ctrl+C / SIGTERM)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	initDB()
+	db := initDB()
 	defer db.Close()
 
 	initRedis(ctx)
 	defer rdb.Close()
 
-	// 2. Inicializa o Hub de WebSocket
-	eventHub = events.NewHub()
-	go eventHub.Run()
+	// 2. Inicializa o Hub de Eventos (PubSub)
+	eventHub = events.NewHub(rdb)
+	go eventHub.Run(ctx) // Ajustado: Passando o ctx
 
-	// 3. Inicializa o Worker Pool (Limite de 3 workers concorrentes)
-	workerPool := workers.NewWorkerPool(db, rdb, eventHub, 3)
-	workerPool.Start(ctx)
+	// 3. Inicializa os Workers e Handlers desacoplados
+	orderWorker := order.NewOrderWorker(db, rdb, eventHub, 3)
+	orderWorker.Start(ctx)
 
-	// 4. Mux e Rotas
+	deliveryWorker := delivery.NewDeliveryWorker(db, eventHub)
+	eventHandler := events.NewEventHandler(eventHub, deliveryWorker)
+	go eventHandler.Start(ctx)
+
+	// 4. Mux e Rotas HTTP/WebSocket
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -261,7 +280,7 @@ func main() {
 		Handler: mux,
 	}
 
-	// 5. Inicia o servidor em uma goroutine
+	// 5. Inicia o servidor HTTP em background
 	go func() {
 		fmt.Printf("Servidor rodando na porta %s (WebSocket em /ws)...\n", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -269,11 +288,10 @@ func main() {
 		}
 	}()
 
-	// 6. Aguarda o sinal de encerramento (SIGINT/SIGTERM)
+	// 6. Aguarda sinal de encerramento
 	<-ctx.Done()
 	log.Println("\n🛑 Sinal de desligamento recebido. Iniciando Graceful Shutdown...")
 
-	// Contexto com timeout de 5s para o encerramento das conexões pendentes do servidor HTTP
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 

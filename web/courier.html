@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>App do Entregador</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 20px;
+        background: #121212;
+        color: #fff;
+      }
+      .offer-card {
+        background: #333;
+        padding: 20px;
+        border-radius: 8px;
+        border: 2px solid #ff9800;
+        display: none;
+        margin-top: 20px;
+      }
+      .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 4px;
+        font-weight: bold;
+        cursor: pointer;
+        margin-right: 10px;
+      }
+      .btn-accept {
+        background: #4caf50;
+        color: #fff;
+      }
+      .btn-reject {
+        background: #f44336;
+        color: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🛵 App do Entregador (Carlos Motoboy)</h1>
+    <div id="status">Conectando...</div>
+
+    <div id="offer-modal" class="offer-card">
+      <h2>🚨 NOVA OFERTA DE ENTREGA!</h2>
+      <p id="offer-details">Carregando detalhes...</p>
+      <button class="btn btn-accept" onclick="acceptOffer()">
+        ACEITAR CORRIDA
+      </button>
+      <button class="btn btn-reject" onclick="rejectOffer()">Recusar</button>
+    </div>
+
+    <div id="active-delivery" style="margin-top: 30px; display: none">
+      <h3>📍 Corrida em Andamento</h3>
+      <p id="gps-telemetry">Aguardando coordenadas GPS...</p>
+    </div>
+
+    <script>
+      const COURIER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+      const ws = new WebSocket(
+        `ws://localhost:8080/ws?courier_id=${COURIER_ID}`,
+      );
+      let currentOfferId = null;
+
+      ws.onopen = () => {
+        document.getElementById("status").innerText =
+          "🟢 Status: ONLINE (Aguardando ofertas na região...)";
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        console.log("Evento recebido no App do Entregador:", data);
+
+        // 1. Recebeu uma oferta enviada pelo Dispatcher
+        if (data.type === "DELIVERY_OFFERED") {
+          currentOfferId = data.offer_id;
+          document.getElementById("offer-details").innerText =
+            `Pedido ID: ${data.order_id}`;
+          document.getElementById("offer-modal").style.display = "block";
+        }
+
+        // 2. Recebe atualizações do GPS da simulação
+        if (data.type === "LOCATION_UPDATED") {
+          document.getElementById("active-delivery").style.display = "block";
+          document.getElementById("gps-telemetry").innerText =
+            `Posição Atual -> Lat: ${data.latitude.toFixed(5)}, Lng: ${data.longitude.toFixed(5)}`;
+        }
+
+        if (data.type === "DELIVERED") {
+          alert("🎉 Entrega concluída com sucesso!");
+          document.getElementById("active-delivery").style.display = "none";
+        }
+      };
+
+      function acceptOffer() {
+        // Dispara a confirmação de aceite via HTTP POST para a API
+        fetch(`http://localhost:8080/offers/${currentOfferId}/accept`, {
+          method: "POST",
+        }).then(() => {
+          document.getElementById("offer-modal").style.display = "none";
+          document.getElementById("active-delivery").style.display = "block";
+        });
+      }
+
+      function rejectOffer() {
+        document.getElementById("offer-modal").style.display = "none";
+      }
+    </script>
+  </body>
+</html>
