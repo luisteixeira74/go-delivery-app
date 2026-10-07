@@ -79,21 +79,6 @@ make simulate-e2e
 
 Reset -> Migrations -> Seed -> Disparo de pedido -> Alocação do Motoboy (Redis) ->
 
-### 📁 Estrutura de Diretórios
-
-.
-├── cmd/
-│ └── seed/ # Scripts para popular banco de dados e Redis
-├── docs/
-│ └── images/ # Ativos da documentação (screenshots e diagramas)
-├── events/ # Hub WebSocket e barramento de eventos do domínio
-├── workers/ # Worker Pool e consumidores da fila Redis
-├── web/ # Interface Web, arquivos estáticos e mapa Leaflet.js
-├── init.sql # Migrações SQL, tipos ENUM e tabelas PostGIS
-├── docker-compose.yml# Orquestração de containers e healthchecks
-├── Makefile # Scripts de automação de testes E2E e reset de banco
-└── main.go # Ponto de entrada das APIs e servidores
-
 ## 📁 Estrutura do Projeto
 
 ```plaintext
