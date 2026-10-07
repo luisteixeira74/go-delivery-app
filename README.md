@@ -10,14 +10,6 @@ Plataforma de orquestração de entregas em tempo real construída com arquitetu
 
 ---
 
-## 🎯 Principais Funcionalidades
-
-- Processamento Assíncrono via Redis: Fila de mensagens (`RPush` / `BLPop`) para desalocar requisições HTTP do processamento pesado.
-- Worker Pool Concorrente: Goroutines dedicadas consumindo a fila do Redis e executando simulações de transição de status em paralelo.
-- Atualização em Tempo Real (WebSocket / EventHub): Comunicação bi-direcional para movimentação automática dos cards do Kanban e marcador de mapa.
-- Rastreamento de GPS: Simulação de rota ponto a ponto do entregador enviando dados geográficos continuous via WebSocket.
-- Persistência de Dados: Histórico e transições de pedidos gravados no PostgreSQL.
-
 ## 🎯 Principais Funcionalidades & Engenharia
 
 - Processamento Assíncrono via Redis: Fila de mensagens (`RPush` / `BLPop`) para desacoplar as requisições HTTP do processamento pesado.
