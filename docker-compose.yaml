@@ -1,102 +1,126 @@
-version: "3.8"
+networks:
+  ifood_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
 
 services:
-  # ---------------------------------------------------
-  # Database: PostgreSQL com suporte GIS para posições
-  # ---------------------------------------------------
-
   postgres:
     image: postgis/postgis:15-3.3-alpine
     container_name: ifood_poc_postgres
-
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ifood_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
-
     ports:
       - "5432:5432"
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-
     networks:
       - ifood_net
-
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d ifood_db"]
-      interval: 5s
-      timeout: 5s
+      interval: 2s
+      timeout: 3s
       retries: 5
-
-  # ---------------------------------------------------
-  # Broker / Cache: Redis para Pub/Sub e GPS em tempo real
-  # ---------------------------------------------------
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
     container_name: ifood_poc_redis
-
+    restart: unless-stopped
     ports:
       - "6379:6379"
-
     volumes:
       - redis_data:/data
-
     networks:
       - ifood_net
-
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
+      interval: 2s
+      timeout: 3s
       retries: 5
 
-  # ---------------------------------------------------
-  # Go Backend API / WebSockets Server
-  # ---------------------------------------------------
-
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-
-    container_name: ifood_poc_backend
-
+  api_service:
+    build: .
+    container_name: ifood_service_api
+    restart: unless-stopped
+    command: ./server -mode=api
+    environment:
+      - PORT=8080
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgrespassword
+      - DB_NAME=ifood_db
+      - REDIS_ADDR=redis:6379
     ports:
       - "8080:8080"
-
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: postgrespassword
-      DB_NAME: ifood_db
-      REDIS_ADDR: redis:6379
-      PORT: 8080
-
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-
     networks:
       - ifood_net
 
-# ---------------------------------------------------
-# Networks
-# ---------------------------------------------------
+  gateway_service:
+    build: .
+    container_name: ifood_service_gateway
+    restart: unless-stopped
+    command: ./server -mode=gateway
+    environment:
+      - PORT=8081
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - ifood_net
 
-networks:
-  ifood_net:
-    driver: bridge
+  order_service:
+    build: .
+    container_name: ifood_service_order
+    restart: unless-stopped
+    command: ./server -mode=dispatch
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgrespassword
+      - DB_NAME=ifood_db
+      - REDIS_ADDR=redis:6379
+      - ORDER_WORKERS=3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ifood_net
 
-# ---------------------------------------------------
-# Volumes
-# ---------------------------------------------------
-
-volumes:
-  postgres_data:
-  redis_data:
+  delivery_service:
+    build: .
+    container_name: ifood_service_delivery
+    restart: unless-stopped
+    command: ./server -mode=dispatch
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgrespassword
+      - DB_NAME=ifood_db
+      - REDIS_ADDR=redis:6379
+      - DELIVERY_WORKERS=2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ifood_net

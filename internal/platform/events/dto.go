@@ -25,6 +25,7 @@ type OrderEvent struct {
 	Type      EventType `json:"type"`
 	OrderID   string    `json:"order_id"`
 	StoreID   string    `json:"store_id,omitempty"`
+	Status    string    `json:"status,omitempty"`
 	CourierID string    `json:"courier_id,omitempty"`
 	WorkerID  int       `json:"worker_id,omitempty"`
 	Items     []ItemDTO `json:"items,omitempty"`

@@ -1,6 +1,6 @@
-# 🛵 Go Delivery - Processamento Concorrente de Pedidos & Rastreamento em Tempo Real
+# 🛵 Go Delivery System - Processamento Concorrente de Pedidos & Rastreamento em Tempo Real
 
-Aplicação desenvolvida em **Go (Golang)** simulando uma plataforma completa de entregas em tempo real com processamento assíncrono de pedidos via **Redis Queue**, atualização de posições de GPS e interface visual com **Kanban Kanban / WebSocket**.
+Plataforma de orquestração de entregas em tempo real construída com arquitetura de microserviços em Go . O sistema utiliza Redis para mensageria assíncrona/cache, PostgreSQL (PostGIS) para dados relacionais e geoespaciais, e WebSockets para streaming de dados em tempo real no Dashboard.
 
 ---
 
@@ -12,60 +12,58 @@ Aplicação desenvolvida em **Go (Golang)** simulando uma plataforma completa de
 
 ## 🎯 Principais Funcionalidades
 
-- **Processamento Assíncrono via Redis:** Fila de mensagens (`RPush` / `BLPop`) para desalocar requisições HTTP do processamento pesado.
-- **Worker Pool Concorrente:** Goroutines dedicadas consumindo a fila do Redis e executando simulações de transição de status em paralelo.
-- **Atualização em Tempo Real (WebSocket / EventHub):** Comunicação bi-direcional para movimentação automática dos cards do Kanban e marcador de mapa.
-- **Rastreamento de GPS:** Simulação de rota ponto a ponto do entregador enviando dados geográficos continuous via WebSocket.
-- **Persistência de Dados:** Histórico e transições de pedidos gravados no **PostgreSQL**.
+- Processamento Assíncrono via Redis: Fila de mensagens (`RPush` / `BLPop`) para desalocar requisições HTTP do processamento pesado.
+- Worker Pool Concorrente: Goroutines dedicadas consumindo a fila do Redis e executando simulações de transição de status em paralelo.
+- Atualização em Tempo Real (WebSocket / EventHub): Comunicação bi-direcional para movimentação automática dos cards do Kanban e marcador de mapa.
+- Rastreamento de GPS: Simulação de rota ponto a ponto do entregador enviando dados geográficos continuous via WebSocket.
+- Persistência de Dados: Histórico e transições de pedidos gravados no PostgreSQL.
+
+## 🎯 Principais Funcionalidades & Engenharia
+
+- Processamento Assíncrono via Redis: Fila de mensagens (`RPush` / `BLPop`) para desacoplar as requisições HTTP do processamento pesado.
+- Worker Pool Concorrente em Go: Goroutines dedicadas consumindo a fila do Redis e executando transições de estado em paralelo.
+- Streaming em Tempo Real (WebSockets / EventHub): Atualização instantânea dos cards no Kanban e movimentação dos marcadores no mapa Leaflet.js sem necessidade de polling.
+- Rastreamento GPS & PostGIS: Simulação de rotas ponto a ponto do entregador persistindo coordenadas geográficas no banco espacial.
+- Resiliência e Orquestração: Subida containerizada com _healthchecks_ encadeados via Docker Compose para eliminar race conditions.
 
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
-- **Linguagem:** Go 1.20+
-- **Banco de Dados Relacional:** PostgreSQL
-- **Fila & Cache:** Redis (`go-redis/v9`)
-- **Comunicação em Tempo Real:** WebSockets (`gorilla/websocket`)
-- **Frontend / Dashboard:** HTML5, CSS3, JavaScript (Leaflet.js para mapas)
+- Linguagem: Go 1.20+
+- Banco de Dados Relacional: PostgreSQL
+- Fila & Cache: Redis (`go-redis/v9`)
+- Comunicação em Tempo Real: WebSockets (`gorilla/websocket`)
+- Frontend / Dashboard: HTML5, CSS3, JavaScript (Leaflet.js para mapas)
 
 ---
 
-## 🚀 Como Executar o Projeto
+## Ciclo de Vida do Pedido (State Machine)
 
-### 1. Pré-requisitos
+CONFIRMED: Pedido criado pelo cliente via API REST (/orders).
+IN_PREPARATION: Cozinha assume o pedido via KDS (/orders/:id/status).
+READY_FOR_DELIVERY: Cozinha finaliza o preparo.
+OUT_FOR_DELIVERY: Motor de despacho aloca o entregador disponível (IDLE) no Redis e atualiza a rota.
+DELIVERED: Entregador conclui a entrega no endereço do cliente.
 
-Certifique-se de ter instalado em sua máquina:
+## 🚀 Como Executar e Testar o Projeto
 
-- [Go](https://go.dev/) (v1.20 ou superior)
-- [Docker](https://www.docker.com/) & Docker Compose
-
-### 2. Subir os Serviços (PostgreSQL & Redis)
+### Subir a Infraestrutura Containerizada (Inicie todos os microserviços, banco de dados e cache)
 
 ```bash
 docker-compose up -d
 ```
 
-### 🧪 Testando a Fila de Pedidos (Concorrência)
+## Escolha o Modo de Teste
 
-Para simular múltiplos pedidos simultâneos sendo enviados para a fila do Redis, execute o comando abaixo no terminal:
+🟢 Opção A: Simulação Visual no Navegador (Recomendado para UX/Interface)
 
-```bash
-curl -X POST http://localhost:8080/orders \
- -H "Content-Type: application/json" \
- -d '{"store_id":"s1","delivery_latitude":-23.56168,"delivery_longitude":-46.655981,"items":[{"name":"X-Burguer","quantity":2,"price":29.0}]}' & \
-curl -X POST http://localhost:8080/orders \
- -H "Content-Type: application/json" \
- -d '{"store_id":"s1","delivery_latitude":-23.56168,"delivery_longitude":-46.655981,"items":[{"name":"Pizza Pepperoni","quantity":1,"price":58.0}]}' &
-```
-
-20 Pedidos de uma vez
+1. Acesse o Painel de Operações em seu navegador: http://localhost:8080
+2. Abra o DevTools (F12 $\rightarrow$ aba Console/Network) para acompanhar a conexão WebSocket ativa
+3. Em outra janela do terminal, envie uma carga de pedidos concorrentes para ver os cards movimentando em tempo real: Dispara 20 pedidos simultâneos:
 
 ```bash
-#!/bin/bash
-echo "🚀 Disparando 20 pedidos para a API..."
-
-for i in {1..20}
-do
+for i in {1..20}; do
    curl -s -X POST http://localhost:8080/orders \
      -H "Content-Type: application/json" \
      -d '{
@@ -75,20 +73,53 @@ do
        "items": [{"name": "X-Burguer", "quantity": 1, "price": 25.0}]
      }' > /dev/null &
 done
-
-echo "✅ 20 pedidos enviados para a fila do Redis!"
 ```
+
+🟡 Opção B: Simulação Automatizada E2E via CLI (Recomendado para Avaliação Técnica)
+
+Se você deseja testar a resiliência das migrações, criação de schema, seed de dados e transição de estados dos microserviços de ponta a ponta sem necessidade de clicar na tela:
+
+```Bash
+
+make simulate-e2e
+
+```
+
+Reset -> Migrations -> Seed -> Disparo de pedido -> Alocação do Motoboy (Redis) ->
 
 ### 📁 Estrutura de Diretórios
 
-Plaintext
-
 .
+├── cmd/
+│ └── seed/ # Scripts para popular banco de dados e Redis
 ├── docs/
-│ └── images/ # Imagens do sistema usadas na documentação
-│ └── dashboard.png
-├── events/ # Hub WebSocket e eventos de domínio
-├── workers/ # Worker Pool & Consumidor da fila Redis
-├── web/ # Arquivos estáticos e template do frontend
-├── main.go # Ponto de entrada do servidor HTTP e conexões
-└── README.md
+│ └── images/ # Ativos da documentação (screenshots e diagramas)
+├── events/ # Hub WebSocket e barramento de eventos do domínio
+├── workers/ # Worker Pool e consumidores da fila Redis
+├── web/ # Interface Web, arquivos estáticos e mapa Leaflet.js
+├── init.sql # Migrações SQL, tipos ENUM e tabelas PostGIS
+├── docker-compose.yml# Orquestração de containers e healthchecks
+├── Makefile # Scripts de automação de testes E2E e reset de banco
+└── main.go # Ponto de entrada das APIs e servidores
+
+## 📁 Estrutura do Projeto
+
+```plaintext
+.
+├── cmd/
+│   ├── seed/         # Population de dados mockados (lojas, entregadores e coordenadas)
+│   ├── server/       # Ponto de entrada dos servidores e APIs em Go
+│   └── simulation/   # Script de simulação de tráfego e requisições
+├── docs/
+│   └── images/       # Ativos de documentação e screenshots da aplicação
+├── internal/         # Regras de negócio da aplicação (código privado Go)
+│   ├── delivery/     # Serviços geoespaciais e workers de rastreamento de entregadores
+│   ├── order/        # Handlers HTTP de pedidos e workers de processamento concorrente
+│   └── platform/
+│       └── events/   # Engine de WebSockets, Hub de clientes, DTOs e eventos de domínio
+├── web/              # Interfaces estáticas do usuário (Dashboard, Painel da Loja e App Entregador)
+├── docker-compose.yaml # Orquestração dos containers (PostgreSQL + PostGIS, Redis e APIs)
+├── Dockerfile        # Build multi-stage da aplicação em Go
+├── init.sql          # Migrações relacionais, extensão PostGIS, tipos ENUM e tabelas
+└── Makefile          # Automação de resets de banco, build e testes E2E
+```

@@ -54,9 +54,10 @@ func (h *EventHandler) Start(ctx context.Context) {
 }
 
 func (h *EventHandler) routeEvent(ctx context.Context, event OrderEvent) {
-	switch event.Type {
-	case OrderReady:
-		log.Printf("[Event Handler] 📦 Pedido %s pronto. Acionando logística de entrega...", event.OrderID)
+	// Compara a conversão explícita de string para pegar qualquer variação do evento de pedido pronto
+	switch string(event.Type) {
+	case "ORDER_READY", "ORDER_READY_FOR_PICKUP", "READY", "READY_FOR_PICKUP":
+		log.Printf("[Event Handler] 📦 Pedido %s pronto (%s). Acionando logística de entrega...", event.OrderID, event.Type)
 
 		startLat, startLng := -23.55052, -46.633308
 		endLat, endLng := -23.56168, -46.655981
@@ -71,6 +72,11 @@ func (h *EventHandler) routeEvent(ctx context.Context, event OrderEvent) {
 				event.TotalCent,
 				startLat, startLng, endLat, endLng,
 			)
+		} else {
+			log.Printf("[Event Handler] ⚠️ DeliveryService não foi configurado!")
 		}
+
+	default:
+		log.Printf("[Event Handler] ℹ️ Evento recebido sem ação de entrega: %s", event.Type)
 	}
 }

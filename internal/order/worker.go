@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"time"
 
 	"go-delivery/internal/platform/events"
@@ -16,8 +17,8 @@ import (
 type OrderTask struct {
 	OrderID   string           `json:"order_id"`
 	StoreID   string           `json:"store_id"`
-	TotalCent int              `json:"total_cent"`
 	Items     []events.ItemDTO `json:"items"`
+	TotalCent int              `json:"total_cent"`
 }
 
 type OrderWorker struct {
@@ -78,22 +79,24 @@ func (w *OrderWorker) Start(ctx context.Context) {
 						log.Printf("[Order Worker] 🔓 Slot liberado! (Slots em uso: %d/%d)", len(w.semaphore), cap(w.semaphore))
 					}()
 
-					w.processOrderLifecycle(ctx, t)
+					w.processOrderIngestion(ctx, t)
 				}(task)
 			}
 		}
 	}()
 }
 
-func (w *OrderWorker) processOrderLifecycle(ctx context.Context, task OrderTask) {
-	log.Printf("🟢 [ORDER WORKER] Em execução: Pedido %s", task.OrderID)
+// processOrderIngestion confirma o pedido no banco e notifica a cozinha via eventHub.
+func (w *OrderWorker) processOrderIngestion(ctx context.Context, task OrderTask) {
+	log.Printf("🟢 [ORDER WORKER] Registrando e validando pedido: %s", task.OrderID)
 
-	// 1. IN_PREPARATION (3s)
-	time.Sleep(3 * time.Second)
-	w.updateOrderStatus(ctx, task.OrderID, "IN_PREPARATION")
+	// 1. Garante que o status no banco é CONFIRMED (compatível com o enum do Postgres)
+	updateOrderStatus(w.db, w.eventHub, task.OrderID, "CONFIRMED", 0)
+
+	// 2. Publica o evento usando a constante fortemente tipada events.OrderCreated
 	w.eventHub.Publish(ctx, events.OrderEvent{
 		EventID:   uuid.NewString(),
-		Type:      "ORDER_IN_PREPARATION",
+		Type:      events.OrderCreated, // Usando a constante do pacote events
 		OrderID:   task.OrderID,
 		StoreID:   task.StoreID,
 		Items:     task.Items,
@@ -101,24 +104,64 @@ func (w *OrderWorker) processOrderLifecycle(ctx context.Context, task OrderTask)
 		Timestamp: time.Now(),
 	})
 
-	// 2. READY (4s)
-	time.Sleep(4 * time.Second)
-	w.updateOrderStatus(ctx, task.OrderID, "READY")
-	w.eventHub.Publish(ctx, events.OrderEvent{
-		EventID:   uuid.NewString(),
-		Type:      "ORDER_READY",
-		OrderID:   task.OrderID,
-		StoreID:   task.StoreID,
-		Items:     task.Items,
-		TotalCent: task.TotalCent,
-		Timestamp: time.Now(),
-	})
+	log.Printf("✅ [ORDER WORKER] Pedido %s pronto na fila do KDS. Aguardando ação da cozinha.", task.OrderID)
 }
 
-func (w *OrderWorker) updateOrderStatus(ctx context.Context, orderID string, status string) {
-	if w.db == nil {
+func updateOrderStatus(db *sql.DB, eventHub *events.Hub, orderID, status string, workerID int) {
+	ctx := context.Background()
+
+	// Atualiza no banco
+	query := `UPDATE orders SET status = $1::order_status WHERE id = $2`
+	if _, err := db.ExecContext(ctx, query, status, orderID); err != nil {
+		log.Printf("Erro ao atualizar status do pedido %s: %v", orderID, err)
 		return
 	}
-	query := `UPDATE orders SET status = $1::order_status WHERE id = $2`
-	w.db.ExecContext(ctx, query, status, orderID)
+
+	// Notifica via WebSocket / EventHub
+	eventType := "ORDER_" + status
+	eventHub.Publish(ctx, events.OrderEvent{
+		EventID:   uuid.NewString(),
+		Type:      events.EventType(eventType),
+		OrderID:   orderID,
+		Status:    status,
+		WorkerID:  workerID,
+		Timestamp: time.Now(),
+	})
+
+	log.Printf("⚙️ Worker %d atualizou Pedido %s -> %s", workerID, orderID, status)
+}
+
+func StartOrderWorker(workerID int, rdb *redis.Client, db *sql.DB, eventHub *events.Hub) {
+	log.Printf("👷 Worker %d iniciado e aguardando pedidos...", workerID)
+
+	for {
+		// BLPop bloqueia até que haja uma tarefa na fila "order_tasks"
+		result, err := rdb.BLPop(context.Background(), 0, "order_tasks").Result()
+		if err != nil {
+			log.Printf("Erro no Worker %d ao consumir fila: %v", workerID, err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		// result[0] é o nome da fila, result[1] é o payload JSON
+		var task OrderTask
+		if err := json.Unmarshal([]byte(result[1]), &task); err != nil {
+			log.Printf("Worker %d: erro ao desserializar tarefa: %v", workerID, err)
+			continue
+		}
+
+		log.Printf("⚡ Worker %d pegou o Pedido %s", workerID, task.OrderID)
+
+		// 1. Simula tempo de preparação (ex: entre 3 e 6 segundos)
+		prepTime := time.Duration(3+rand.Intn(4)) * time.Second
+		time.Sleep(prepTime)
+
+		updateOrderStatus(db, eventHub, task.OrderID, "IN_PREPARATION", workerID)
+
+		// 2. Simula tempo finalizando a montagem (ex: entre 2 e 5 segundos)
+		readyTime := time.Duration(2+rand.Intn(4)) * time.Second
+		time.Sleep(readyTime)
+
+		updateOrderStatus(db, eventHub, task.OrderID, "READY", workerID)
+	}
 }
